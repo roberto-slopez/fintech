@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fintech-api-service
+  namespace: fintech
+  labels:
+    app: fintech-api
+spec:
+  type: ClusterIP
+  selector:
+    app: fintech-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+

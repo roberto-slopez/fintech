@@ -1,0 +1,54 @@
+# Fintech Multipaís - Configuration File
+# This file can be overridden by environment variables with FINTECH_ prefix
+
+server:
+  port: 8080
+  host: "0.0.0.0"
+  mode: "debug" # debug, release, test
+  read_timeout: 15s
+  write_timeout: 15s
+  shutdown_timeout: 30s
+  cors_origins:
+    - "http://localhost:5173"
+    - "http://localhost:3000"
+    - "http://127.0.0.1:5173"
+
+database:
+  # URL is set via DATABASE_URL environment variable
+  max_open_conns: 25
+  max_idle_conns: 10
+  conn_max_lifetime: 30m
+  conn_max_idle_time: 5m
+  ssl_mode: "require"
+
+cache:
+  type: "memory" # redis, memory
+  host: "localhost"
+  port: 6379
+  db: 0
+  ttl: 300 # seconds
+
+queue:
+  type: "postgres"
+  worker_count: 5
+  poll_interval: 1s
+  max_retries: 3
+  retry_delay: 30s
+  job_timeout: 5m
+
+jwt:
+  # Secret is set via JWT_SECRET environment variable
+  access_expiry: 15m
+  refresh_expiry: 168h # 7 days
+  issuer: "fintech-multipass"
+
+webhook:
+  timeout: 30s
+  max_retries: 3
+  retry_delay: 5s
+
+log:
+  level: "info" # debug, info, warn, error
+  format: "console" # json, console
+  output: "stdout" # stdout, file
+
