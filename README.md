@@ -74,7 +74,7 @@ Sistema completo para la gestión de solicitudes de crédito en múltiples país
 
 - Go 1.22+ https://go.dev/dl/
 - Node.js 20+ https://nodejs.org/en/download
-- PostgreSQL (o usar la conexión Neon proporcionada) https://neon.new/
+- PostgreSQL (o usar la conexión Neon proporcionada) https://neon.new/ `npx get-db --yes`
 
 ### 1. Clonar y configurar
 
@@ -84,7 +84,7 @@ git clone <repository-url>
 cd fintech
 
 # Configurar variables de entorno
-cp backend/.env.example backend/.env
+cp .env.example backend/.env
 # Editar backend/.env con tus credenciales
 
 # Instalar dependencias
@@ -105,8 +105,8 @@ make migrate
 make run
 
 # O por separado:
-make run-backend  # Puerto 8080
-make run-frontend # Puerto 5173
+go run cmd/api/main.go  # Puerto 8080
+pnpm run dev o  npm run dev # Puerto 5173
 ```
 
 ### 4. Acceder
