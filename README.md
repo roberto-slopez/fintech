@@ -89,6 +89,9 @@ cp .env.example backend/.env
 
 # Instalar dependencias
 make install
+# comandos manuales 
+cd backend && go mod download && go mod tidy
+cd frontend && pnpm install # Puede usar npm sin problemas 
 ```
 
 ### 2. Ejecutar migraciones
@@ -96,6 +99,8 @@ make install
 ```bash
 # Las migraciones crean todas las tablas y datos iniciales
 make migrate
+# comandos manuales
+cd backend && go run cmd/migrate/main.go up
 ```
 
 ### 3. Iniciar en desarrollo
@@ -103,10 +108,9 @@ make migrate
 ```bash
 # Inicia backend y frontend simultáneamente
 make run
-
-# O por separado:
+# comandos manuales
 go run cmd/api/main.go  # Puerto 8080
-pnpm run dev o  npm run dev # Puerto 5173
+pnpm run dev # Puerto 5173 tambien se puede utlizar npm si se instalo con npm
 ```
 
 ### 4. Acceder
