@@ -1204,6 +1204,13 @@ ORDER BY type, status;
 
 ## 🗄️ Estrategia de Caché
 
+> **Resumen Ejecutivo:**
+> - **Tecnología**: Redis (producción) + MemoryCache (fallback/desarrollo)
+> - **Qué se cachea**: Países (1h), Solicitudes (5min), Reglas (30min)
+> - **Invalidación**: TTL automático + invalidación explícita al actualizar
+> - **Implementación**: `backend/internal/infrastructure/cache/cache.go`
+> - **Uso**: `CountryUseCase` y `ApplicationUseCase` usan caché activamente
+
 El sistema implementa una capa de caché con **Redis** como almacenamiento principal y **caché en memoria** como fallback.
 
 ### Arquitectura de Caché
