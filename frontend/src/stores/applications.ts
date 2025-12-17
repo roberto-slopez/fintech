@@ -27,15 +27,18 @@ export const useApplicationsStore = defineStore('applications', () => {
     
     try {
       const result = await applicationService.list({ ...filters.value, ...filter })
-      applications.value = result.applications
+      // Asegurar que applications siempre sea un array
+      applications.value = Array.isArray(result.applications) ? result.applications : []
       pagination.value = {
-        total: result.total,
-        page: result.page,
-        pageSize: result.page_size,
-        totalPages: result.total_pages
+        total: result.total || 0,
+        page: result.page || 1,
+        pageSize: result.page_size || 20,
+        totalPages: result.total_pages || 0
       }
     } catch (e: any) {
       error.value = e.message || 'Error loading applications'
+      // En caso de error, asegurar que applications sea un array vacío
+      applications.value = []
       throw e
     } finally {
       loading.value = false
@@ -62,7 +65,18 @@ export const useApplicationsStore = defineStore('applications', () => {
     
     try {
       const newApp = await applicationService.create(data)
-      applications.value.unshift(newApp)
+      
+      // Asegurar que applications.value sea un array antes de unshift
+      if (!Array.isArray(applications.value)) {
+        applications.value = []
+      }
+      
+      // Verificar que no exista ya (puede llegar por WebSocket antes)
+      const exists = applications.value.find(a => a.id === newApp.id)
+      if (!exists) {
+        applications.value.unshift(newApp)
+      }
+      
       return newApp
     } catch (e: any) {
       error.value = e.message || 'Error creating application'
@@ -112,7 +126,12 @@ export const useApplicationsStore = defineStore('applications', () => {
   function handleRealtimeUpdate(data: any) {
     realtimeUpdates.value++
     
-    if (data.type === 'application_created') {
+    // Asegurar que applications.value sea un array
+    if (!Array.isArray(applications.value)) {
+      applications.value = []
+    }
+    
+    if (data.type === 'application_created' && data.application) {
       // Add new application to the top of the list
       const exists = applications.value.find(a => a.id === data.application.id)
       if (!exists) {
@@ -121,12 +140,12 @@ export const useApplicationsStore = defineStore('applications', () => {
     } else if (data.type === 'application_updated' || data.type === 'status_changed') {
       // Update existing application
       const index = applications.value.findIndex(a => a.id === data.application_id)
-      if (index !== -1) {
+      if (index !== -1 && data.data) {
         applications.value[index] = { ...applications.value[index], ...data.data }
       }
       
       // Update current application if viewing
-      if (currentApplication.value?.id === data.application_id) {
+      if (currentApplication.value?.id === data.application_id && data.data) {
         currentApplication.value = { ...currentApplication.value, ...data.data }
       }
     }

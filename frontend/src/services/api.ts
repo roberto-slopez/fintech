@@ -136,7 +136,13 @@ export const applicationService = {
     }
 
     const response = await api.get<ApplicationListResult>(`/applications?${params.toString()}`)
-    return response.data
+    const data = response.data
+    
+    // Asegurar que applications siempre sea un array
+    return {
+      ...data,
+      applications: Array.isArray(data.applications) ? data.applications : []
+    }
   },
 
   async getById(id: string): Promise<CreditApplication> {
@@ -146,6 +152,13 @@ export const applicationService = {
 
   async create(data: Partial<CreditApplication>): Promise<CreditApplication> {
     const response = await api.post<CreditApplication>('/applications', data)
+    
+    // Validar que la respuesta tenga los datos esperados
+    if (!response.data || !response.data.id) {
+      console.error('Invalid response from create application:', response.data)
+      throw new Error('La respuesta del servidor no es válida')
+    }
+    
     return response.data
   },
 

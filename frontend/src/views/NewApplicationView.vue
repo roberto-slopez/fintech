@@ -119,6 +119,11 @@ async function handleSubmit() {
   try {
     const application = await applicationsStore.createApplication(form.value)
     
+    // Verificar que la respuesta tenga un ID válido
+    if (!application || !application.id) {
+      throw new Error('La respuesta del servidor no contiene un ID válido')
+    }
+    
     toast.add({
       severity: 'success',
       summary: 'Solicitud Creada',
@@ -126,8 +131,12 @@ async function handleSubmit() {
       life: 5000
     })
     
+    // Pequeño delay para asegurar que el toast se muestre antes de navegar
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
     router.push(`/applications/${application.id}`)
   } catch (error: any) {
+    console.error('Error creating application:', error)
     toast.add({
       severity: 'error',
       summary: 'Error',

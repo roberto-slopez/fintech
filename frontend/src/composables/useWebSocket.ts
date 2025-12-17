@@ -98,43 +98,63 @@ export function useWebSocket() {
   }
 
   function handleMessage(message: any) {
-    switch (message.type) {
-      case 'pong':
-        // Server acknowledged ping
-        break
+    // Ignorar mensajes inválidos
+    if (!message || !message.type) {
+      console.warn('Invalid WebSocket message received:', message)
+      return
+    }
 
-      case 'application_created':
-        applicationsStore.handleRealtimeUpdate(message)
-        toast.add({
-          severity: 'info',
-          summary: 'Nueva Solicitud',
-          detail: `Se ha creado una nueva solicitud de crédito`,
-          life: 5000
-        })
-        break
+    try {
+      switch (message.type) {
+        case 'pong':
+          // Server acknowledged ping
+          break
 
-      case 'application_updated':
-      case 'status_changed':
-        applicationsStore.handleRealtimeUpdate(message)
-        toast.add({
-          severity: 'info',
-          summary: 'Actualización',
-          detail: `Una solicitud ha sido actualizada`,
-          life: 3000
-        })
-        break
+        case 'application_created':
+          // Solo actualizar el store, el toast ya se muestra en el formulario
+          // si el usuario creó la solicitud manualmente
+          if (message.application) {
+            applicationsStore.handleRealtimeUpdate(message)
+            // Solo mostrar toast si NO estamos en la página de crear solicitud
+            // para evitar duplicados
+            if (!window.location.pathname.includes('/applications/new')) {
+              toast.add({
+                severity: 'info',
+                summary: 'Nueva Solicitud',
+                detail: `Se ha creado una nueva solicitud de crédito`,
+                life: 5000
+              })
+            }
+          }
+          break
 
-      case 'notification':
-        toast.add({
-          severity: message.data?.severity || 'info',
-          summary: message.data?.title || 'Notificación',
-          detail: message.data?.message || '',
-          life: 5000
-        })
-        break
+        case 'application_updated':
+        case 'status_changed':
+          applicationsStore.handleRealtimeUpdate(message)
+          if (message.data || message.application_id) {
+            toast.add({
+              severity: 'info',
+              summary: 'Actualización',
+              detail: `Una solicitud ha sido actualizada`,
+              life: 3000
+            })
+          }
+          break
 
-      default:
-        console.log('Unknown message type:', message.type)
+        case 'notification':
+          toast.add({
+            severity: message.data?.severity || 'info',
+            summary: message.data?.title || 'Notificación',
+            detail: message.data?.message || '',
+            life: 5000
+          })
+          break
+
+        default:
+          console.log('Unknown message type:', message.type)
+      }
+    } catch (e) {
+      console.error('Error handling WebSocket message:', e, message)
     }
   }
 
