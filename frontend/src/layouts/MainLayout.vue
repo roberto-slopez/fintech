@@ -21,7 +21,21 @@ const currentRoute = computed(() => route.path)
 
 function isActive(path: string): boolean {
   if (path === '/') return route.path === '/'
-  return route.path.startsWith(path)
+  // Coincidencia exacta o si la ruta actual es exactamente la del menú
+  // Evita que /applications/new marque también /applications
+  if (route.path === path) return true
+  // Solo marcar como activo si es una sub-ruta Y el item del menú no tiene hijos en el menú
+  // Por ejemplo: /applications/:id debe marcar /applications, pero /applications/new no
+  if (route.path.startsWith(path + '/')) {
+    // Verificar si hay otro item del menú que coincida mejor
+    const hasMoreSpecificMatch = menuItems.some(item => 
+      item.route !== path && 
+      item.route.startsWith(path) && 
+      route.path.startsWith(item.route)
+    )
+    return !hasMoreSpecificMatch
+  }
+  return false
 }
 
 function logout() {

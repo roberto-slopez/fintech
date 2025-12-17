@@ -72,9 +72,9 @@ Sistema completo para la gestión de solicitudes de crédito en múltiples país
 
 ### Prerrequisitos
 
-- Go 1.22+
-- Node.js 20+
-- PostgreSQL (o usar la conexión Neon proporcionada)
+- Go 1.22+ https://go.dev/dl/
+- Node.js 20+ https://nodejs.org/en/download
+- PostgreSQL (o usar la conexión Neon proporcionada) https://neon.new/
 
 ### 1. Clonar y configurar
 
