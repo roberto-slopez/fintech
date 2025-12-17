@@ -36,7 +36,18 @@ func (r *ApplicationRepository) Create(ctx context.Context, app *entity.CreditAp
 		app.Status = entity.StatusPending
 	}
 
-	validationJSON, _ := json.Marshal(app.ValidationResults)
+	// Ensure validation results is a valid JSON string for PostgreSQL
+	var validationJSON string
+	if app.ValidationResults == nil || len(app.ValidationResults) == 0 {
+		validationJSON = "[]"
+	} else {
+		jsonBytes, err := json.Marshal(app.ValidationResults)
+		if err != nil {
+			validationJSON = "[]"
+		} else {
+			validationJSON = string(jsonBytes)
+		}
+	}
 
 	query := `
 		INSERT INTO credit_applications (
@@ -44,7 +55,7 @@ func (r *ApplicationRepository) Create(ctx context.Context, app *entity.CreditAp
 			email, phone, requested_amount, monthly_income, status,
 			status_reason, requires_review, validation_results, risk_score,
 			application_date, created_at, updated_at, created_by_ip, user_agent
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14, $15, $16, $17, $18, $19)
 	`
 
 	return r.db.Exec(ctx, query,
@@ -120,13 +131,16 @@ func (r *ApplicationRepository) Update(ctx context.Context, app *entity.CreditAp
 
 // UpdateStatus actualiza solo el estado de una solicitud
 func (r *ApplicationRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status entity.ApplicationStatus, reason string) error {
+	// Convertir status a string para evitar problemas de tipo en PostgreSQL
+	statusStr := string(status)
+	
 	query := `
 		UPDATE credit_applications SET
 			status = $2, status_reason = $3, updated_at = NOW(),
-			processed_at = CASE WHEN $2 IN ('APPROVED', 'REJECTED', 'DISBURSED') THEN NOW() ELSE processed_at END
+			processed_at = CASE WHEN $2::text IN ('APPROVED', 'REJECTED', 'DISBURSED') THEN NOW() ELSE processed_at END
 		WHERE id = $1
 	`
-	return r.db.Exec(ctx, query, id, status, reason)
+	return r.db.Exec(ctx, query, id, statusStr, reason)
 }
 
 // Delete elimina una solicitud (soft delete podría implementarse aquí)
@@ -367,7 +381,13 @@ func (r *ApplicationRepository) SaveStateTransition(ctx context.Context, transit
 // GetStateTransitions obtiene el historial de transiciones de una solicitud
 func (r *ApplicationRepository) GetStateTransitions(ctx context.Context, applicationID uuid.UUID) ([]entity.StateTransition, error) {
 	query := `
-		SELECT id, application_id, from_status, to_status, reason, triggered_by, triggered_by_id, created_at
+		SELECT id, application_id, 
+			COALESCE(from_status, '') as from_status, 
+			to_status, 
+			COALESCE(reason, '') as reason, 
+			triggered_by, 
+			triggered_by_id, 
+			created_at
 		FROM state_transitions
 		WHERE application_id = $1
 		ORDER BY created_at DESC

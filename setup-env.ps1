@@ -1,3 +1,7 @@
+# Script para configurar el archivo .env
+Write-Host "Configurando archivo .env..." -ForegroundColor Green
+
+$envContent = @"
 # Database
 DATABASE_URL=
 DATABASE_URL_DIRECT=
@@ -23,3 +27,9 @@ FINTECH_WEBHOOK_SECRET=your-webhook-secret-key
 # Log
 FINTECH_LOG_LEVEL=info
 FINTECH_LOG_FORMAT=json
+"@
+
+$envPath = Join-Path $PSScriptRoot ".env"
+Set-Content -Path $envPath -Value $envContent -Encoding UTF8
+
+Write-Host "Archivo .env creado exitosamente" -ForegroundColor Green

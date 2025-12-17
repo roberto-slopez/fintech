@@ -8,20 +8,22 @@ import Tooltip from 'primevue/tooltip'
 import App from './App.vue'
 import router from './router'
 
-// PrimeVue styles
-import 'primevue/resources/themes/lara-dark-teal/theme.css'
-import 'primevue/resources/primevue.min.css'
+// PrimeVue styles (order matters!)
 import 'primeicons/primeicons.css'
 import 'primeflex/primeflex.css'
+import 'primevue/resources/themes/lara-dark-teal/theme.css'
 
-// Custom styles
+// Custom styles (after PrimeVue to allow overrides)
 import './assets/styles/main.scss'
 
 const app = createApp(App)
 
 app.use(createPinia())
 app.use(router)
-app.use(PrimeVue, { ripple: true })
+app.use(PrimeVue, { 
+  ripple: true,
+  inputStyle: 'outlined'  // 'outlined' or 'filled'
+})
 app.use(ToastService)
 app.use(ConfirmationService)
 

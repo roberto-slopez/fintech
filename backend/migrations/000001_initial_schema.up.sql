@@ -668,9 +668,9 @@ INSERT INTO banking_providers (country_id, code, name, type, config) VALUES
 -- =====================================================
 -- DATOS INICIALES: Usuario administrador
 -- =====================================================
--- Password: admin123 (bcrypt hash)
+-- Password: admin123 (bcrypt hash - cost 10)
 INSERT INTO users (email, password_hash, full_name, role) VALUES
-('admin@fintech.com', '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', 'Administrador Sistema', 'ADMIN');
+('admin@fintech.com', '$2a$10$Kac2TPZ1MMYytDioZfNbiO/VKBE1OOXtEkKh3lchEAiYM/ptnPCEO', 'Administrador Sistema', 'ADMIN');
 
 -- =====================================================
 -- COMENTARIOS PARA DOCUMENTACIÓN

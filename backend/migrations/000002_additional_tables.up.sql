@@ -1,6 +1,6 @@
--- Migración 002: Tablas adicionales para webhooks, auditoría y notificaciones
+-- Migración 002: Tablas adicionales para webhooks salientes
 
--- Tabla de endpoints de webhooks
+-- Tabla de endpoints de webhooks (para webhooks salientes)
 CREATE TABLE IF NOT EXISTS webhook_endpoints (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     country_id UUID REFERENCES countries(id) ON DELETE CASCADE,
@@ -14,70 +14,17 @@ CREATE TABLE IF NOT EXISTS webhook_endpoints (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Tabla de eventos de webhooks
-CREATE TABLE IF NOT EXISTS webhook_events (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    event_type VARCHAR(100) NOT NULL,
-    application_id UUID REFERENCES credit_applications(id) ON DELETE SET NULL,
-    country_code VARCHAR(10),
-    data JSONB,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Tabla de entregas de webhooks
+-- Tabla de entregas de webhooks salientes
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     endpoint_id UUID REFERENCES webhook_endpoints(id) ON DELETE CASCADE,
-    event_id UUID REFERENCES webhook_events(id) ON DELETE CASCADE,
+    event_type VARCHAR(100) NOT NULL,
+    payload JSONB NOT NULL,
     status VARCHAR(20) DEFAULT 'PENDING', -- PENDING, SENT, FAILED
     http_status INT,
     response_body TEXT,
     attempts INT DEFAULT 0,
     last_attempt TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Tabla de logs de auditoría
-CREATE TABLE IF NOT EXISTS audit_logs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    entity_type VARCHAR(50) NOT NULL,
-    entity_id UUID NOT NULL,
-    action VARCHAR(50) NOT NULL,
-    actor_id UUID,
-    actor_type VARCHAR(20), -- USER, SYSTEM, WEBHOOK
-    old_values JSONB,
-    new_values JSONB,
-    ip_address VARCHAR(45),
-    user_agent TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Tabla de información bancaria
-CREATE TABLE IF NOT EXISTS banking_info (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    application_id UUID UNIQUE REFERENCES credit_applications(id) ON DELETE CASCADE,
-    provider_id UUID REFERENCES banking_providers(id),
-    credit_score INT,
-    total_debt DECIMAL(15,2),
-    available_credit DECIMAL(15,2),
-    payment_history VARCHAR(20),
-    bank_accounts INT DEFAULT 0,
-    active_loans INT DEFAULT 0,
-    months_employed INT,
-    raw_response JSONB,
-    retrieved_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    expires_at TIMESTAMP WITH TIME ZONE
-);
-
--- Tabla de transiciones de estado
-CREATE TABLE IF NOT EXISTS state_transitions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    application_id UUID REFERENCES credit_applications(id) ON DELETE CASCADE,
-    from_status VARCHAR(30),
-    to_status VARCHAR(30) NOT NULL,
-    reason TEXT,
-    triggered_by VARCHAR(20) NOT NULL, -- SYSTEM, USER, WEBHOOK
-    triggered_by_id UUID,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -98,25 +45,15 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 
 -- Índices para rendimiento
-CREATE INDEX IF NOT EXISTS idx_webhook_events_type ON webhook_events(event_type);
-CREATE INDEX IF NOT EXISTS idx_webhook_events_app ON webhook_events(application_id);
+CREATE INDEX IF NOT EXISTS idx_webhook_endpoints_country ON webhook_endpoints(country_id);
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_status ON webhook_deliveries(status);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_actor ON audit_logs(actor_id);
-CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_banking_info_app ON banking_info(application_id);
-CREATE INDEX IF NOT EXISTS idx_state_transitions_app ON state_transitions(application_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_app ON notifications(application_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status);
 
--- Agregar columna risk_score a credit_applications si no existe
-DO $$ 
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                   WHERE table_name='credit_applications' AND column_name='risk_score') THEN
-        ALTER TABLE credit_applications ADD COLUMN risk_score DECIMAL(5,2);
-    END IF;
-END $$;
+-- Trigger para updated_at en webhook_endpoints
+DROP TRIGGER IF EXISTS update_webhook_endpoints_updated_at ON webhook_endpoints;
+CREATE TRIGGER update_webhook_endpoints_updated_at BEFORE UPDATE ON webhook_endpoints
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Datos de prueba para webhook endpoints
 INSERT INTO webhook_endpoints (country_id, url, secret, event_types, is_active) 
@@ -126,5 +63,3 @@ SELECT c.id, 'https://webhook.example.com/fintech/' || c.code, 'secret_' || c.co
 FROM countries c
 WHERE c.is_active = true
 ON CONFLICT DO NOTHING;
-
-

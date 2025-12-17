@@ -15,6 +15,7 @@ import (
 	"github.com/fintech-multipass/backend/internal/interfaces/http/router"
 	"github.com/fintech-multipass/backend/internal/infrastructure/cache"
 	"github.com/fintech-multipass/backend/internal/infrastructure/queue"
+	"github.com/joho/godotenv"
 )
 
 // @title Fintech Multipaís API
@@ -26,6 +27,14 @@ import (
 // @in header
 // @name Authorization
 func main() {
+	// Load .env file if it exists (for local development)
+	if err := godotenv.Load("../.env"); err != nil {
+		// .env file not found or error loading it, continue with system environment variables
+		if err := godotenv.Load(); err != nil {
+			// También intentar desde el directorio actual
+		}
+	}
+
 	// Initialize logger
 	log := logger.NewLogger()
 	log.Info().Msg("Starting Fintech Multipaís API...")

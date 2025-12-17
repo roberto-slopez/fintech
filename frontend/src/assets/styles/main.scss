@@ -31,17 +31,20 @@
   --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.3);
 }
 
-* {
-  margin: 0;
-  padding: 0;
+// Only apply box-sizing, keep PrimeVue margins/paddings intact
+*, *::before, *::after {
   box-sizing: border-box;
 }
 
-body {
+html {
   font-family: var(--font-family);
+  line-height: 1.6;
+}
+
+body {
+  margin: 0;
   background: linear-gradient(135deg, var(--color-surface) 0%, #0c1222 100%);
   color: var(--color-text);
-  line-height: 1.6;
   min-height: 100vh;
 }
 

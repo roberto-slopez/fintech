@@ -159,7 +159,7 @@ export const applicationService = {
 
   async getHistory(id: string): Promise<StateTransition[]> {
     const response = await api.get<StateTransition[]>(`/applications/${id}/history`)
-    return response.data
+    return response.data || []
   }
 }
 

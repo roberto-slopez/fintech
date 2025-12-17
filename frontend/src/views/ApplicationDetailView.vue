@@ -119,7 +119,11 @@ onMounted(async () => {
   try {
     const id = route.params.id as string
     await applicationsStore.fetchApplication(id)
-    history.value = await applicationsStore.fetchHistory(id)
+    
+    // Fetch history with null check
+    const historyData = await applicationsStore.fetchHistory(id)
+    history.value = historyData || []
+    
     await countriesStore.fetchCountries()
   } catch (error) {
     toast.add({

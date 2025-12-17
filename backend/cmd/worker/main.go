@@ -10,10 +10,19 @@ import (
 	"github.com/fintech-multipass/backend/internal/infrastructure/database"
 	"github.com/fintech-multipass/backend/internal/infrastructure/logger"
 	"github.com/fintech-multipass/backend/internal/infrastructure/queue"
+	"github.com/joho/godotenv"
 )
 
 // Worker principal para procesamiento asíncrono de trabajos
 func main() {
+	// Load .env file if it exists (for local development)
+	if err := godotenv.Load("../.env"); err != nil {
+		// .env file not found or error loading it, continue with system environment variables
+		if err := godotenv.Load(); err != nil {
+			// También intentar desde el directorio actual
+		}
+	}
+
 	log := logger.NewLogger()
 	log.Info().Msg("Starting Fintech Worker...")
 

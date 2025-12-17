@@ -33,6 +33,10 @@ func NewPostgresConnection(cfg config.DatabaseConfig) (*PostgresDB, error) {
 	poolConfig.MaxConnLifetime = cfg.ConnMaxLifetime
 	poolConfig.MaxConnIdleTime = cfg.ConnMaxIdleTime
 	
+	// Usar modo simple para evitar conflictos con prepared statements
+	// Esto es más compatible con connection poolers como PgBouncer
+	poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	
 	// Crear pool
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
