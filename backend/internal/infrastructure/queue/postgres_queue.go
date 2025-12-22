@@ -80,18 +80,27 @@ func (q *PostgresQueue) Enqueue(ctx context.Context, job *entity.Job) error {
 	job.CreatedAt = time.Now()
 	job.UpdatedAt = time.Now()
 
-	payloadJSON, err := json.Marshal(job.Payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
+	// El payload debe ser []byte con JSON válido
+	// Verificar que sea JSON válido
+	if len(job.Payload) == 0 {
+		return fmt.Errorf("empty payload")
 	}
+	if !json.Valid(job.Payload) {
+		q.log.Error().Str("payload", string(job.Payload)).Msg("Invalid JSON payload")
+		return fmt.Errorf("invalid JSON payload")
+	}
+
+	// Convertir a string para que pgx lo envíe correctamente como JSONB
+	payloadStr := string(job.Payload)
 
 	query := `
 		INSERT INTO jobs_queue (id, type, status, priority, payload, max_attempts, scheduled_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)
 	`
 	
-	err = q.db.Exec(ctx, query, job.ID, job.Type, job.Status, job.Priority, payloadJSON, job.MaxAttempts, job.ScheduledAt, job.CreatedAt, job.UpdatedAt)
+	err := q.db.Exec(ctx, query, job.ID, job.Type, job.Status, job.Priority, payloadStr, job.MaxAttempts, job.ScheduledAt, job.CreatedAt, job.UpdatedAt)
 	if err != nil {
+		q.log.Error().Err(err).Str("payload", payloadStr).Msg("Failed to insert job")
 		return fmt.Errorf("failed to enqueue job: %w", err)
 	}
 
@@ -132,22 +141,44 @@ func (q *PostgresQueue) Dequeue(ctx context.Context, workerID string) (*entity.J
 
 	var job entity.Job
 	var payloadJSON, resultJSON []byte
+	var errorMessage *string
+	var startedAt, completedAt *time.Time
 
 	row := q.db.QueryRow(ctx, query, workerID)
 	err := row.Scan(
 		&job.ID, &job.Type, &job.Status, &job.Priority,
-		&payloadJSON, &resultJSON, &job.ErrorMessage,
+		&payloadJSON, &resultJSON, &errorMessage,
 		&job.Attempts, &job.MaxAttempts,
-		&job.ScheduledAt, &job.StartedAt, &job.CompletedAt,
+		&job.ScheduledAt, &startedAt, &completedAt,
 		&job.CreatedAt, &job.UpdatedAt,
 	)
 
 	if err != nil {
+		// pgx devuelve ErrNoRows cuando no hay filas, lo cual es normal
+		// Para otros errores, logearlos
+		if err.Error() != "no rows in result set" {
+			q.log.Error().Err(err).Str("worker_id", workerID).Msg("Error dequeuing job")
+		}
 		return nil, nil // No hay trabajos disponibles
 	}
 
 	job.Payload = payloadJSON
 	job.Result = resultJSON
+	if errorMessage != nil {
+		job.ErrorMessage = *errorMessage
+	}
+	if startedAt != nil {
+		job.StartedAt = startedAt
+	}
+	if completedAt != nil {
+		job.CompletedAt = completedAt
+	}
+
+	q.log.Debug().
+		Str("job_id", job.ID.String()).
+		Str("type", string(job.Type)).
+		Str("worker_id", workerID).
+		Msg("Job dequeued successfully")
 
 	return &job, nil
 }
@@ -224,10 +255,108 @@ func (q *PostgresQueue) Stats(ctx context.Context) (map[entity.JobStatus]int64, 
 	return stats, nil
 }
 
+// RecentJobInfo información de un job reciente para depuración
+type RecentJobInfo struct {
+	ID           uuid.UUID         `json:"id"`
+	Type         entity.JobType    `json:"type"`
+	Status       entity.JobStatus  `json:"status"`
+	Attempts     int               `json:"attempts"`
+	MaxAttempts  int               `json:"max_attempts"`
+	ErrorMessage *string           `json:"error_message,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	ScheduledAt  time.Time         `json:"scheduled_at"`
+	StartedAt    *time.Time        `json:"started_at,omitempty"`
+	CompletedAt  *time.Time        `json:"completed_at,omitempty"`
+}
+
+// GetRecentJobs obtiene los jobs recientes para depuración
+func (q *PostgresQueue) GetRecentJobs(ctx context.Context, limit int) ([]RecentJobInfo, error) {
+	query := `
+		SELECT id, type, status, attempts, max_attempts, error_message, 
+		       created_at, scheduled_at, started_at, completed_at
+		FROM jobs_queue 
+		ORDER BY created_at DESC
+		LIMIT $1
+	`
+	rows, err := q.db.Query(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []RecentJobInfo
+	for rows.Next() {
+		var job RecentJobInfo
+		if err := rows.Scan(&job.ID, &job.Type, &job.Status, &job.Attempts, &job.MaxAttempts,
+			&job.ErrorMessage, &job.CreatedAt, &job.ScheduledAt, &job.StartedAt, &job.CompletedAt); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
+// GetFailedJobs obtiene los jobs fallidos para depuración
+func (q *PostgresQueue) GetFailedJobs(ctx context.Context, limit int) ([]RecentJobInfo, error) {
+	query := `
+		SELECT id, type, status, attempts, max_attempts, error_message, 
+		       created_at, scheduled_at, started_at, completed_at
+		FROM jobs_queue 
+		WHERE status = 'FAILED'
+		ORDER BY completed_at DESC
+		LIMIT $1
+	`
+	rows, err := q.db.Query(ctx, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []RecentJobInfo
+	for rows.Next() {
+		var job RecentJobInfo
+		if err := rows.Scan(&job.ID, &job.Type, &job.Status, &job.Attempts, &job.MaxAttempts,
+			&job.ErrorMessage, &job.CreatedAt, &job.ScheduledAt, &job.StartedAt, &job.CompletedAt); err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs, nil
+}
+
+// RecoverOrphanedJobs recupera jobs que quedaron en PROCESSING por más de X minutos
+func (q *PostgresQueue) RecoverOrphanedJobs(ctx context.Context, staleMinutes int) (int64, error) {
+	query := `
+		UPDATE jobs_queue 
+		SET status = 'PENDING', 
+			worker_id = NULL, 
+			started_at = NULL
+		WHERE status = 'PROCESSING' 
+		AND started_at < NOW() - INTERVAL '1 minute' * $1
+	`
+	result, err := q.db.Pool.Exec(ctx, query, staleMinutes)
+	if err != nil {
+		return 0, err
+	}
+
+	count := result.RowsAffected()
+	if count > 0 {
+		q.log.Warn().Int64("count", count).Int("stale_minutes", staleMinutes).Msg("Recovered orphaned jobs")
+	}
+	return count, nil
+}
+
 // StartWorkers inicia los workers de procesamiento
 func (q *PostgresQueue) StartWorkers(ctx context.Context, count int) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+
+	// Recuperar jobs huérfanos al inicio (más de 5 minutos en PROCESSING)
+	if recovered, err := q.RecoverOrphanedJobs(ctx, 5); err != nil {
+		q.log.Error().Err(err).Msg("Failed to recover orphaned jobs")
+	} else if recovered > 0 {
+		q.log.Info().Int64("recovered", recovered).Msg("Recovered orphaned jobs at startup")
+	}
 
 	for i := 0; i < count; i++ {
 		worker := &Worker{
@@ -240,7 +369,27 @@ func (q *PostgresQueue) StartWorkers(ctx context.Context, count int) {
 		go worker.Start(ctx)
 	}
 
+	// Iniciar goroutine para recuperar jobs huérfanos periódicamente
+	go q.orphanRecoveryLoop(ctx)
+
 	q.log.Info().Int("count", count).Msg("Workers started")
+}
+
+// orphanRecoveryLoop verifica periódicamente si hay jobs huérfanos
+func (q *PostgresQueue) orphanRecoveryLoop(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := q.RecoverOrphanedJobs(ctx, 5); err != nil {
+				q.log.Error().Err(err).Msg("Failed to recover orphaned jobs in loop")
+			}
+		}
+	}
 }
 
 // StopWorkers detiene todos los workers
@@ -275,6 +424,13 @@ func (w *Worker) Start(ctx context.Context) {
 }
 
 func (w *Worker) processNextJob(ctx context.Context) {
+	// Recuperar de cualquier panic para evitar que el worker muera
+	defer func() {
+		if r := recover(); r != nil {
+			w.log.Error().Interface("panic", r).Msg("Worker recovered from panic")
+		}
+	}()
+
 	job, err := w.queue.Dequeue(ctx, w.id)
 	if err != nil {
 		w.log.Error().Err(err).Msg("Failed to dequeue job")
@@ -288,13 +444,15 @@ func (w *Worker) processNextJob(ctx context.Context) {
 		Str("job_id", job.ID.String()).
 		Str("type", string(job.Type)).
 		Int("attempt", job.Attempts).
-		Msg("Processing job")
+		Msg("Processing job - starting")
 
 	// Buscar handler
 	handler, exists := w.queue.handlers[job.Type]
 	if !exists {
 		w.log.Error().Str("type", string(job.Type)).Msg("No handler for job type")
-		_ = w.queue.Fail(ctx, job.ID, "no handler for job type")
+		if err := w.queue.Fail(ctx, job.ID, "no handler for job type"); err != nil {
+			w.log.Error().Err(err).Msg("Failed to mark job as failed")
+		}
 		return
 	}
 
@@ -302,16 +460,29 @@ func (w *Worker) processNextJob(ctx context.Context) {
 	jobCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
-	if err := handler(jobCtx, job); err != nil {
+	w.log.Debug().Str("job_id", job.ID.String()).Msg("Executing handler")
+
+	handlerErr := handler(jobCtx, job)
+
+	w.log.Debug().
+		Str("job_id", job.ID.String()).
+		Bool("handler_success", handlerErr == nil).
+		Msg("Handler execution finished")
+
+	if handlerErr != nil {
 		w.log.Error().
-			Err(err).
+			Err(handlerErr).
 			Str("job_id", job.ID.String()).
-			Msg("Job failed")
-		_ = w.queue.Fail(ctx, job.ID, err.Error())
+			Str("type", string(job.Type)).
+			Msg("Job handler returned error")
+		if err := w.queue.Fail(ctx, job.ID, handlerErr.Error()); err != nil {
+			w.log.Error().Err(err).Str("job_id", job.ID.String()).Msg("Failed to mark job as failed")
+		}
 		return
 	}
 
 	// Marcar como completado
+	w.log.Debug().Str("job_id", job.ID.String()).Msg("Marking job as completed")
 	if err := w.queue.Complete(ctx, job.ID, nil); err != nil {
 		w.log.Error().
 			Err(err).
@@ -320,7 +491,8 @@ func (w *Worker) processNextJob(ctx context.Context) {
 	} else {
 		w.log.Info().
 			Str("job_id", job.ID.String()).
-			Msg("Job completed")
+			Str("type", string(job.Type)).
+			Msg("Job completed successfully")
 	}
 }
 
@@ -328,32 +500,63 @@ func (w *Worker) processNextJob(ctx context.Context) {
 
 // handleRiskEvaluation procesa evaluaciones de riesgo crediticio
 func (q *PostgresQueue) handleRiskEvaluation(ctx context.Context, job *entity.Job) error {
-	q.log.Info().Str("job_id", job.ID.String()).Msg("Processing risk evaluation")
+	q.log.Info().
+		Str("job_id", job.ID.String()).
+		Str("payload", string(job.Payload)).
+		Msg("Processing risk evaluation - starting")
 
 	var payload struct {
 		ApplicationID string `json:"application_id"`
+		CountryID     string `json:"country_id"`
 	}
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		q.log.Error().Err(err).Str("raw_payload", string(job.Payload)).Msg("Failed to parse risk evaluation payload")
 		return fmt.Errorf("failed to parse job payload: %w", err)
 	}
 
 	appID, err := uuid.Parse(payload.ApplicationID)
 	if err != nil {
+		q.log.Error().Err(err).Str("application_id", payload.ApplicationID).Msg("Invalid application_id UUID")
 		return fmt.Errorf("invalid application ID: %w", err)
 	}
 
-	// Obtener solicitud
+	// Obtener solicitud junto con la configuración del país
 	var app entity.CreditApplication
+	var countryConfig []byte
+	var countryCurrency string
 	query := `
-		SELECT id, country_id, full_name, document_type, document_number, 
-		       requested_amount, monthly_income, status
-		FROM credit_applications WHERE id = $1
+		SELECT ca.id, ca.country_id, ca.full_name, ca.document_type, ca.document_number, 
+		       ca.requested_amount, ca.monthly_income, ca.status,
+		       c.config, c.currency
+		FROM credit_applications ca
+		JOIN countries c ON c.id = ca.country_id
+		WHERE ca.id = $1
 	`
 	row := q.db.QueryRow(ctx, query, appID)
 	if err := row.Scan(&app.ID, &app.CountryID, &app.FullName, &app.DocumentType,
-		&app.DocumentNumber, &app.RequestedAmount, &app.MonthlyIncome, &app.Status); err != nil {
+		&app.DocumentNumber, &app.RequestedAmount, &app.MonthlyIncome, &app.Status,
+		&countryConfig, &countryCurrency); err != nil {
+		q.log.Error().Err(err).Str("application_id", appID.String()).Msg("Failed to get application with country config")
 		return fmt.Errorf("failed to get application: %w", err)
 	}
+
+	// Parsear configuración del país
+	var config countryRiskConfig
+	if err := json.Unmarshal(countryConfig, &config); err != nil {
+		q.log.Warn().Err(err).Msg("Failed to parse country config, using defaults")
+		// Valores por defecto si no se puede parsear
+		config.MaxDebtToIncomeRatio = 0.4
+		config.ReviewThreshold = 50000
+		config.MinCreditScore = 600
+	}
+
+	q.log.Debug().
+		Str("application_id", appID.String()).
+		Str("currency", countryCurrency).
+		Float64("review_threshold", config.ReviewThreshold).
+		Int("min_credit_score", config.MinCreditScore).
+		Float64("max_debt_ratio", config.MaxDebtToIncomeRatio).
+		Msg("Country configuration loaded")
 
 	// Obtener información bancaria si existe
 	var bankingInfo entity.BankingInfo
@@ -367,26 +570,49 @@ func (q *PostgresQueue) handleRiskEvaluation(ctx context.Context, job *entity.Jo
 		&bankingInfo.AvailableCredit, &bankingInfo.PaymentHistory,
 		&bankingInfo.BankAccounts, &bankingInfo.ActiveLoans, &bankingInfo.MonthsEmployed); err == nil {
 		app.BankingInfo = &bankingInfo
+		q.log.Debug().
+			Int("credit_score", *bankingInfo.CreditScore).
+			Float64("total_debt", *bankingInfo.TotalDebt).
+			Msg("Banking info found for application")
+	} else {
+		q.log.Warn().Err(err).Str("application_id", appID.String()).Msg("No banking info found - proceeding without it")
 	}
 
-	// Calcular score de riesgo (0-100, donde 100 es bajo riesgo)
-	riskScore := q.calculateRiskScore(&app)
+	// Calcular score de riesgo usando la configuración del país (0-100, donde 100 es bajo riesgo)
+	riskScore := q.calculateRiskScoreWithConfig(&app, &config)
 
-	// Determinar resultado
+	// Determinar resultado basado en el score y configuración del país
 	var newStatus entity.ApplicationStatus
 	var statusReason string
 	requiresReview := false
 
-	if riskScore >= 70 {
+	// Verificar si el monto supera el umbral de revisión del país
+	if app.RequestedAmount >= config.ReviewThreshold {
+		requiresReview = true
+	}
+
+	// Verificar score crediticio mínimo del país
+	if app.BankingInfo != nil && app.BankingInfo.CreditScore != nil {
+		if *app.BankingInfo.CreditScore < config.MinCreditScore {
+			riskScore -= 20 // Penalizar si no cumple el mínimo del país
+		}
+	}
+
+	if riskScore >= 70 && !requiresReview {
 		newStatus = entity.StatusApproved
-		statusReason = fmt.Sprintf("Auto-approved with risk score %.0f", riskScore)
-	} else if riskScore >= 40 {
+		statusReason = fmt.Sprintf("Auto-approved with risk score %.0f (currency: %s)", riskScore, countryCurrency)
+	} else if riskScore >= 40 || requiresReview {
 		newStatus = entity.StatusUnderReview
-		statusReason = fmt.Sprintf("Requires manual review - risk score %.0f", riskScore)
+		if requiresReview {
+			statusReason = fmt.Sprintf("Manual review required - amount %.2f %s exceeds threshold %.2f %s (risk score: %.0f)",
+				app.RequestedAmount, countryCurrency, config.ReviewThreshold, countryCurrency, riskScore)
+		} else {
+			statusReason = fmt.Sprintf("Manual review required - risk score %.0f", riskScore)
+		}
 		requiresReview = true
 	} else {
 		newStatus = entity.StatusRejected
-		statusReason = fmt.Sprintf("Auto-rejected due to high risk - score %.0f", riskScore)
+		statusReason = fmt.Sprintf("Auto-rejected due to high risk - score %.0f (min credit score required: %d)", riskScore, config.MinCreditScore)
 	}
 
 	// Actualizar solicitud
@@ -496,9 +722,122 @@ func (q *PostgresQueue) calculateRiskScore(app *entity.CreditApplication) float6
 	return score
 }
 
+// countryRiskConfig configuración de riesgo por país
+type countryRiskConfig struct {
+	MinLoanAmount        float64 `json:"min_loan_amount"`
+	MaxLoanAmount        float64 `json:"max_loan_amount"`
+	MinIncomeRequired    float64 `json:"min_income_required"`
+	MaxDebtToIncomeRatio float64 `json:"max_debt_to_income_ratio"`
+	ReviewThreshold      float64 `json:"review_threshold"`
+	MinCreditScore       int     `json:"min_credit_score"`
+}
+
+// calculateRiskScoreWithConfig calcula el score de riesgo usando la configuración del país
+func (q *PostgresQueue) calculateRiskScoreWithConfig(app *entity.CreditApplication, config *countryRiskConfig) float64 {
+	score := 50.0 // Base score
+
+	// Factor 1: Relación monto/ingreso usando el ratio máximo del país (peso: 25%)
+	if app.MonthlyIncome > 0 {
+		// Calcular ratio de endeudamiento
+		annualIncome := app.MonthlyIncome * 12
+		requestedRatio := app.RequestedAmount / annualIncome
+
+		// Usar el max_debt_to_income_ratio del país como referencia
+		maxRatio := config.MaxDebtToIncomeRatio
+		if maxRatio == 0 {
+			maxRatio = 0.4 // Default
+		}
+
+		if requestedRatio < maxRatio*0.5 { // Menos del 50% del máximo permitido
+			score += 25
+		} else if requestedRatio < maxRatio*0.75 { // Entre 50% y 75% del máximo
+			score += 15
+		} else if requestedRatio < maxRatio { // Entre 75% y 100% del máximo
+			score += 5
+		} else if requestedRatio > maxRatio*1.25 { // Supera el máximo por más del 25%
+			score -= 15
+		}
+	}
+
+	// Factor 2: Score crediticio vs mínimo requerido del país (peso: 35%)
+	if app.BankingInfo != nil && app.BankingInfo.CreditScore != nil {
+		creditScore := *app.BankingInfo.CreditScore
+		minScore := config.MinCreditScore
+		if minScore == 0 {
+			minScore = 600 // Default
+		}
+
+		// Comparar con el mínimo del país
+		if creditScore >= minScore+150 { // Muy por encima del mínimo
+			score += 35
+		} else if creditScore >= minScore+50 { // Por encima del mínimo
+			score += 20
+		} else if creditScore >= minScore { // Cumple el mínimo
+			score += 5
+		} else { // Por debajo del mínimo
+			score -= 20
+		}
+	}
+
+	// Factor 3: Historial de pagos (peso: 20%)
+	if app.BankingInfo != nil && app.BankingInfo.PaymentHistory != nil {
+		switch *app.BankingInfo.PaymentHistory {
+		case "GOOD":
+			score += 20
+		case "REGULAR":
+			score += 5
+		case "BAD":
+			score -= 25
+		}
+	}
+
+	// Factor 4: Deuda existente vs relación máxima del país (peso: 10%)
+	if app.BankingInfo != nil && app.BankingInfo.TotalDebt != nil && app.MonthlyIncome > 0 {
+		debt := *app.BankingInfo.TotalDebt
+		// Calcular ratio de deuda actual sobre ingreso
+		currentDebtRatio := debt / (app.MonthlyIncome * 12)
+		maxRatio := config.MaxDebtToIncomeRatio
+		if maxRatio == 0 {
+			maxRatio = 0.4
+		}
+
+		if currentDebtRatio < maxRatio*0.25 { // Deuda muy baja
+			score += 10
+		} else if currentDebtRatio < maxRatio*0.5 { // Deuda moderada
+			score += 5
+		} else if currentDebtRatio > maxRatio { // Deuda supera el máximo
+			score -= 10
+		}
+	}
+
+	// Factor 5: Estabilidad laboral (peso: 10%)
+	if app.BankingInfo != nil && app.BankingInfo.MonthsEmployed != nil {
+		months := *app.BankingInfo.MonthsEmployed
+		if months >= 24 {
+			score += 10
+		} else if months >= 12 {
+			score += 5
+		} else if months < 6 {
+			score -= 5
+		}
+	}
+
+	// Limitar score entre 0 y 100
+	if score < 0 {
+		score = 0
+	} else if score > 100 {
+		score = 100
+	}
+
+	return score
+}
+
 // handleBankingInfoFetch obtiene información bancaria del proveedor
 func (q *PostgresQueue) handleBankingInfoFetch(ctx context.Context, job *entity.Job) error {
-	q.log.Info().Str("job_id", job.ID.String()).Msg("Fetching banking info")
+	q.log.Info().
+		Str("job_id", job.ID.String()).
+		Str("payload", string(job.Payload)).
+		Msg("Fetching banking info - starting")
 
 	var payload struct {
 		ApplicationID  string `json:"application_id"`
@@ -507,11 +846,27 @@ func (q *PostgresQueue) handleBankingInfoFetch(ctx context.Context, job *entity.
 		CountryID      string `json:"country_id"`
 	}
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		q.log.Error().Err(err).Str("raw_payload", string(job.Payload)).Msg("Failed to parse job payload")
 		return fmt.Errorf("failed to parse job payload: %w", err)
 	}
 
-	appID, _ := uuid.Parse(payload.ApplicationID)
-	countryID, _ := uuid.Parse(payload.CountryID)
+	q.log.Debug().
+		Str("application_id", payload.ApplicationID).
+		Str("country_id", payload.CountryID).
+		Str("document_type", payload.DocumentType).
+		Msg("Payload parsed successfully")
+
+	appID, err := uuid.Parse(payload.ApplicationID)
+	if err != nil {
+		q.log.Error().Err(err).Str("application_id", payload.ApplicationID).Msg("Invalid application_id UUID")
+		return fmt.Errorf("invalid application_id: %w", err)
+	}
+
+	countryID, err := uuid.Parse(payload.CountryID)
+	if err != nil {
+		q.log.Error().Err(err).Str("country_id", payload.CountryID).Msg("Invalid country_id UUID")
+		return fmt.Errorf("invalid country_id: %w", err)
+	}
 
 	// Obtener proveedor activo para el país
 	providerQuery := `
@@ -527,9 +882,17 @@ func (q *PostgresQueue) handleBankingInfoFetch(ctx context.Context, job *entity.
 
 	row := q.db.QueryRow(ctx, providerQuery, countryID)
 	if err := row.Scan(&providerID, &providerCode, &providerName, &providerConfig); err != nil {
-		q.log.Warn().Err(err).Msg("No active banking provider found")
-		return fmt.Errorf("no active banking provider for country: %w", err)
+		q.log.Warn().
+			Err(err).
+			Str("country_id", countryID.String()).
+			Msg("No active banking provider found for country")
+		return fmt.Errorf("no active banking provider for country %s: %w", countryID, err)
 	}
+
+	q.log.Debug().
+		Str("provider_id", providerID.String()).
+		Str("provider_code", providerCode).
+		Msg("Banking provider found")
 
 	// Simular llamada al proveedor (en producción sería una llamada real)
 	// Generar datos basados en el hash del documento para consistencia
@@ -567,72 +930,123 @@ func (q *PostgresQueue) handleBankingInfoFetch(ctx context.Context, job *entity.
 			retrieved_at = NOW(),
 			expires_at = NOW() + INTERVAL '24 hours'
 	`
+	
+	q.log.Debug().
+		Str("banking_id", bankingID.String()).
+		Str("application_id", appID.String()).
+		Str("provider_id", providerID.String()).
+		Int("credit_score", creditScore).
+		Msg("Saving banking info to database")
+
 	if err := q.db.Exec(ctx, saveQuery, bankingID, appID, providerID, creditScore, totalDebt,
 		availableCredit, paymentHistory, bankAccounts, activeLoans, monthsEmployed); err != nil {
+		q.log.Error().
+			Err(err).
+			Str("application_id", appID.String()).
+			Msg("Failed to save banking info to database")
 		return fmt.Errorf("failed to save banking info: %w", err)
 	}
+
+	q.log.Info().
+		Str("application_id", appID.String()).
+		Str("banking_id", bankingID.String()).
+		Msg("Banking info saved successfully")
 
 	// Actualizar estado de la solicitud
 	updateQuery := `UPDATE credit_applications SET status = 'VALIDATING', updated_at = NOW() WHERE id = $1`
 	if err := q.db.Exec(ctx, updateQuery, appID); err != nil {
-		q.log.Error().Err(err).Msg("Failed to update application status")
+		q.log.Error().Err(err).Str("application_id", appID.String()).Msg("Failed to update application status")
+	} else {
+		q.log.Info().Str("application_id", appID.String()).Msg("Application status updated to VALIDATING")
 	}
 
 	// Encolar evaluación de riesgo
 	riskJob := &entity.Job{
-		ID:      uuid.New(),
-		Type:    entity.JobTypeRiskEvaluation,
-		Payload: job.Payload,
+		ID:       uuid.New(),
+		Type:     entity.JobTypeRiskEvaluation,
+		Priority: 10,
+		Payload:  job.Payload,
 	}
 	if err := q.Enqueue(ctx, riskJob); err != nil {
-		q.log.Error().Err(err).Msg("Failed to enqueue risk evaluation")
+		q.log.Error().Err(err).Str("application_id", appID.String()).Msg("Failed to enqueue risk evaluation")
+	} else {
+		q.log.Info().
+			Str("application_id", appID.String()).
+			Str("risk_job_id", riskJob.ID.String()).
+			Msg("Risk evaluation job enqueued")
 	}
 
 	q.log.Info().
 		Str("application_id", appID.String()).
 		Str("provider", providerCode).
 		Int("credit_score", creditScore).
-		Msg("Banking info fetched and saved")
+		Float64("total_debt", totalDebt).
+		Str("payment_history", paymentHistory).
+		Msg("Banking info fetch completed successfully")
 
 	return nil
 }
 
 // handleDocumentValidation valida documentos de identidad
 func (q *PostgresQueue) handleDocumentValidation(ctx context.Context, job *entity.Job) error {
-	q.log.Info().Str("job_id", job.ID.String()).Msg("Validating document")
+	q.log.Info().
+		Str("job_id", job.ID.String()).
+		Str("payload", string(job.Payload)).
+		Msg("Validating document - starting")
 
 	var payload struct {
 		ApplicationID  string `json:"application_id"`
 		DocumentType   string `json:"document_type"`
 		DocumentNumber string `json:"document_number"`
-		CountryCode    string `json:"country_code"`
+		CountryID      string `json:"country_id"` // Nota: el trigger envía country_id (UUID)
 	}
 	if err := json.Unmarshal(job.Payload, &payload); err != nil {
+		q.log.Error().Err(err).Str("raw_payload", string(job.Payload)).Msg("Failed to parse document validation payload")
 		return fmt.Errorf("failed to parse job payload: %w", err)
 	}
 
-	// Obtener regex de validación del tipo de documento
-	var validationRegex string
+	q.log.Debug().
+		Str("application_id", payload.ApplicationID).
+		Str("country_id", payload.CountryID).
+		Str("document_type", payload.DocumentType).
+		Msg("Document validation payload parsed")
+
+	countryID, err := uuid.Parse(payload.CountryID)
+	if err != nil {
+		q.log.Error().Err(err).Str("country_id", payload.CountryID).Msg("Invalid country_id UUID")
+		return fmt.Errorf("invalid country_id: %w", err)
+	}
+
+	// Obtener regex de validación del tipo de documento usando country_id
+	var validationRegex *string
 	regexQuery := `
 		SELECT dt.validation_regex 
 		FROM document_types dt
-		JOIN countries c ON dt.country_id = c.id
-		WHERE c.code = $1 AND dt.code = $2
+		WHERE dt.country_id = $1 AND dt.code = $2
 	`
-	row := q.db.QueryRow(ctx, regexQuery, payload.CountryCode, payload.DocumentType)
+	row := q.db.QueryRow(ctx, regexQuery, countryID, payload.DocumentType)
 	if err := row.Scan(&validationRegex); err != nil {
-		q.log.Warn().Err(err).Str("doc_type", payload.DocumentType).Msg("Document type not found")
+		q.log.Warn().
+			Err(err).
+			Str("doc_type", payload.DocumentType).
+			Str("country_id", countryID.String()).
+			Msg("Document type not found - continuing without validation regex")
 	}
 
 	// La validación real se hace en el servicio de validación
 	// Aquí solo registramos el resultado
-	isValid := true // Simplificado - usar validation.RuleValidator para validación real
+	isValid := true
+	if validationRegex != nil && *validationRegex != "" {
+		// En producción, usar regexp.MatchString para validar
+		q.log.Debug().Str("regex", *validationRegex).Msg("Validation regex found")
+	}
 
 	q.log.Info().
+		Str("application_id", payload.ApplicationID).
 		Str("document_type", payload.DocumentType).
-		Str("country", payload.CountryCode).
+		Str("country_id", countryID.String()).
 		Bool("valid", isValid).
-		Msg("Document validation completed")
+		Msg("Document validation completed successfully")
 
 	return nil
 }

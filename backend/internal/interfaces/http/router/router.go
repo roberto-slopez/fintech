@@ -172,6 +172,32 @@ func NewRouter(
 			}
 			c.JSON(http.StatusOK, stats)
 		})
+
+		// Recent jobs (para depuración)
+		admin.GET("/queue/jobs/recent", func(c *gin.Context) {
+			jobs, err := jobQueue.GetRecentJobs(c.Request.Context(), 20)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"jobs":  jobs,
+				"count": len(jobs),
+			})
+		})
+
+		// Failed jobs (para depuración)
+		admin.GET("/queue/jobs/failed", func(c *gin.Context) {
+			jobs, err := jobQueue.GetFailedJobs(c.Request.Context(), 20)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"jobs":  jobs,
+				"count": len(jobs),
+			})
+		})
 	}
 
 	// ==========================================
@@ -183,4 +209,3 @@ func NewRouter(
 
 	return r
 }
-

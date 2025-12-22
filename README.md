@@ -113,6 +113,14 @@ go run cmd/api/main.go  # Puerto 8080
 pnpm run dev # Puerto 5173 tambien se puede utlizar npm si se instalo con npm
 ```
 
+### 3.1 Worker
+
+Iniciar los workers
+
+```bash
+go run cmd\worker\main.go
+```
+
 ### 4. Acceder
 
 - **Frontend**: http://localhost:5173
