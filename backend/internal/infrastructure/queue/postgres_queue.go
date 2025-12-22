@@ -540,6 +540,22 @@ func (q *PostgresQueue) handleRiskEvaluation(ctx context.Context, job *entity.Jo
 		return fmt.Errorf("failed to get application: %w", err)
 	}
 
+	// Verificar si la aplicación ya fue procesada (evitar re-procesar)
+	finalStates := map[entity.ApplicationStatus]bool{
+		entity.StatusApproved:  true,
+		entity.StatusRejected:  true,
+		entity.StatusDisbursed: true,
+		entity.StatusCancelled: true,
+		entity.StatusExpired:   true,
+	}
+	if finalStates[app.Status] {
+		q.log.Info().
+			Str("application_id", appID.String()).
+			Str("current_status", string(app.Status)).
+			Msg("Application already in final state - skipping risk evaluation")
+		return nil // No es un error, simplemente ya fue procesada
+	}
+
 	// Parsear configuración del país
 	var config countryRiskConfig
 	if err := json.Unmarshal(countryConfig, &config); err != nil {
